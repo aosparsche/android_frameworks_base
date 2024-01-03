@@ -38,16 +38,19 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
+import android.app.ActivityTaskManager;
 import android.app.ExitTransitionCoordinator;
 import android.app.ExitTransitionCoordinator.ExitTransitionCallbacks;
 import android.app.ICompatCameraControlCallback;
 import android.app.Notification;
 import android.app.assist.AssistContent;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Insets;
@@ -68,6 +71,7 @@ import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.Settings;
@@ -109,6 +113,8 @@ import com.android.systemui.flags.Flags;
 import com.android.systemui.screenshot.ScreenshotController.SavedImageData.ActionTransition;
 import com.android.systemui.screenshot.TakeScreenshotService.RequestCallback;
 import com.android.systemui.settings.DisplayTracker;
+import com.android.systemui.shared.system.TaskStackChangeListener;
+import com.android.systemui.shared.system.TaskStackChangeListeners;
 import com.android.systemui.util.Assert;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -265,6 +271,12 @@ public class ScreenshotController {
 
     private static final int SCREENSHOT_CORNER_DEFAULT_TIMEOUT_MILLIS = 3000;
 
+    private static final VibrationEffect VIBRATION_EFFECT =
+            VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK);
+
+    private static final VibrationAttributes VIBRATION_ATTRS =
+            VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH);
+
     private final WindowContext mContext;
     private final FeatureFlags mFlags;
     private final ScreenshotNotificationsController mNotificationsController;
@@ -282,8 +294,6 @@ public class ScreenshotController {
     private final ListenableFuture<MediaPlayer> mCameraSound;
     private final AudioManager mAudioManager;
     private final Vibrator mVibrator;
-    private final CameraManager mCameraManager;
-    private int mCamsInUse = 0;
     private final ScrollCaptureClient mScrollCaptureClient;
     private final PhoneWindow mWindow;
     private final DisplayManager mDisplayManager;
@@ -325,6 +335,38 @@ public class ScreenshotController {
                     | ActivityInfo.CONFIG_UI_MODE
                     | ActivityInfo.CONFIG_SCREEN_LAYOUT
                     | ActivityInfo.CONFIG_ASSETS_PATHS);
+
+    private ComponentName mTaskComponentName;
+    private PackageManager mPm;
+
+    private final TaskStackChangeListener mTaskListener = new TaskStackChangeListener() {
+        @Override
+        public void onTaskStackChanged() {
+            mBgExecutor.execute(() -> updateForegroundTaskSync());
+        }
+    };
+
+    private void updateForegroundTaskSync() {
+        try {
+            final ActivityTaskManager.RootTaskInfo focusedStack =
+                    ActivityTaskManager.getService().getFocusedRootTaskInfo();
+            if (focusedStack != null && focusedStack.topActivity != null) {
+                mTaskComponentName = focusedStack.topActivity;
+            }
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to get foreground task component", e);
+        }
+    }
+
+    private String getForegroundAppLabel() {
+        if (mTaskComponentName == null) return null;
+        try {
+            final ActivityInfo ai = mPm.getActivityInfo(mTaskComponentName, 0);
+            return ai.applicationInfo.loadLabel(mPm).toString();
+        } catch (PackageManager.NameNotFoundException e) {
+             return null;
+        }
+    }
 
     @Inject
     ScreenshotController(
@@ -401,9 +443,6 @@ public class ScreenshotController {
         // Grab system services needed for screenshot sound
         mAudioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
         mVibrator = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
-        mCameraManager = (CameraManager) mContext.getSystemService(Context.CAMERA_SERVICE);
-        mCameraManager.registerAvailabilityCallback(mCamCallback,
-                new Handler(Looper.getMainLooper()));
 
         mCopyBroadcastReceiver = new BroadcastReceiver() {
             @Override
@@ -416,6 +455,15 @@ public class ScreenshotController {
         mContext.registerReceiver(mCopyBroadcastReceiver, new IntentFilter(
                         ClipboardOverlayController.COPY_OVERLAY_ACTION),
                 ClipboardOverlayController.SELF_PERMISSION, null, Context.RECEIVER_NOT_EXPORTED);
+
+        // Grab PackageManager
+        mPm = mContext.getPackageManager();
+
+        // Register task stack listener
+        TaskStackChangeListeners.getInstance().registerTaskStackListener(mTaskListener);
+
+        // Initialize current foreground package name
+        updateForegroundTaskSync();
     }
 
     void handleScreenshot(ScreenshotData screenshot, Consumer<Uri> finisher,
@@ -576,6 +624,7 @@ public class ScreenshotController {
         removeWindow();
         releaseMediaPlayer();
         releaseContext();
+        TaskStackChangeListeners.getInstance().unregisterTaskStackListener(mTaskListener);
         mBgExecutor.shutdownNow();
     }
 
@@ -653,8 +702,7 @@ public class ScreenshotController {
 
             @Override
             public void onTouchOutside() {
-                // TODO(159460485): Remove this when focus is handled properly in the system
-                setWindowFocusable(false);
+                dismissScreenshot(SCREENSHOT_DISMISSED_OTHER);
             }
         }, mActionExecutor, mFlags);
         mScreenshotView.setDefaultDisplay(mDisplayTracker.getDefaultDisplayId());
@@ -1046,7 +1094,7 @@ public class ScreenshotController {
         mSaveInBgTask = new SaveImageInBackgroundTask(mContext, mFlags, mImageExporter,
                 mScreenshotSmartActions, data, getActionTransitionSupplier(),
                 mScreenshotNotificationSmartActionsProvider);
-        mSaveInBgTask.execute();
+        mSaveInBgTask.execute(getForegroundAppLabel());
     }
 
 
@@ -1249,48 +1297,19 @@ public class ScreenshotController {
          }
     }
 
-
     private void playShutterSound() {
-       boolean playSound = readCameraSoundForced() && mCamsInUse > 0;
+        boolean playSound = Settings.System.getIntForUser(mContext.getContentResolver(),
+                Settings.System.SCREENSHOT_SHUTTER_SOUND, 1, UserHandle.USER_CURRENT) == 1;
         switch (mAudioManager.getRingerMode()) {
             case AudioManager.RINGER_MODE_SILENT:
-                // do nothing
-                break;
             case AudioManager.RINGER_MODE_VIBRATE:
-                if (mVibrator != null && mVibrator.hasVibrator()) {
-                    mVibrator.vibrate(VibrationEffect.createOneShot(50,
-                            VibrationEffect.DEFAULT_AMPLITUDE));
-                }
-                break;
-            case AudioManager.RINGER_MODE_NORMAL:
-                // in this case we want to play sound even if not forced on
-                playSound = true;
+                playSound = false;
                 break;
         }
-        // We want to play the shutter sound when it's either forced or
-        // when we use normal ringer mode
-        if (playSound && Settings.System.getIntForUser(mContext.getContentResolver(),
-                Settings.System.SCREENSHOT_SHUTTER_SOUND, 1, UserHandle.USER_CURRENT) == 1) {
+        if (playSound) {
             playCameraSound();
+        } else if (mVibrator != null && mVibrator.hasVibrator()) {
+            mVibrator.vibrate(VIBRATION_EFFECT, VIBRATION_ATTRS);
         }
-    }
-
-    private CameraManager.AvailabilityCallback mCamCallback =
-            new CameraManager.AvailabilityCallback() {
-        @Override
-        public void onCameraOpened(String cameraId, String packageId) {
-            mCamsInUse++;
-        }
-
-        @Override
-        public void onCameraClosed(String cameraId) {
-            mCamsInUse--;
-        }
-    };
-
-    private boolean readCameraSoundForced() {
-        return SystemProperties.getBoolean("audio.camerasound.force", false) ||
-                mContext.getResources().getBoolean(
-                        com.android.internal.R.bool.config_camera_sound_forced);
     }
 }

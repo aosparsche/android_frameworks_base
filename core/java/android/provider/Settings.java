@@ -6000,6 +6000,36 @@ public final class Settings {
         public static final String TORCH_POWER_BUTTON_GESTURE = "torch_power_button_gesture";
 
         /**
+         * Whether allowing pocket service to register sensors and dispatch informations.
+         *   0 = disabled
+         *   1 = enabled
+         * @author Carlo Savignano
+         * @hide
+         */
+        public static final String POCKET_JUDGE = "pocket_judge";
+
+        /**
+         * Whether to show heads up only for dialer and sms apps
+         * @hide
+         */
+        public static final String LESS_BORING_HEADS_UP = "less_boring_heads_up";
+
+        /**
+         * Whether to play notification sound and vibration if screen is ON
+         * 0 - never
+         * 1 - always
+         * @hide
+         */
+        public static final String NOTIFICATION_SOUND_VIB_SCREEN_ON =
+                "notification_sound_vib_screen_on";
+
+        /**
+         * Whether to show the ripple animation on fingerprint unlock
+         * @hide
+         */
+        public static final String AUTH_RIPPLE_ENABLED = "auth_ripple_enabled";
+
+        /**
          * Keys we no longer back up under the current schema, but want to continue to
          * process when restoring historical backup datasets.
          *
@@ -6016,6 +6046,12 @@ public final class Settings {
          * @hide
          */
         public static final String THREE_FINGER_GESTURE = "three_finger_gesture";
+
+        /**
+         * Whether to enable smart 5G mode
+         * @hide
+         */
+        public static final String SMART_5G = "smart_5g";
 
         /**
          * These are all public system settings
@@ -6151,6 +6187,7 @@ public final class Settings {
             PRIVATE_SETTINGS.add(GESTURE_ONE_FINGER_SWIPE_RIGHT);
             PRIVATE_SETTINGS.add(GESTURE_ONE_FINGER_SWIPE_DOWN);
             PRIVATE_SETTINGS.add(GESTURE_ONE_FINGER_SWIPE_LEFT);
+            PRIVATE_SETTINGS.add(POCKET_JUDGE);
         }
 
         /**
@@ -11977,6 +12014,12 @@ public final class Settings {
         public static final String DOZE_PICK_UP_GESTURE_AMBIENT = "doze_pick_up_gesture_ambient";
 
         /**
+         * Whether to enable DOZE only when charging
+         * @hide
+         */
+        public static final String DOZE_ON_CHARGE = "doze_on_charge";
+
+        /**
          * These entries are considered common between the personal and the managed profile,
          * since the managed profile doesn't get to change them.
          */
@@ -12070,6 +12113,12 @@ public final class Settings {
          * @hide
          */
         public static final String NAVIGATION_BAR_HINT = "navigation_bar_hint";
+
+        /** Whether to allow one finger quick settings expansion on the right side of the statusbar.
+         *
+         * @hide
+         */
+        public static final String STATUS_BAR_QUICK_QS_PULLDOWN = "status_bar_quick_qs_pulldown";
     }
 
     /**

@@ -179,6 +179,8 @@ import com.android.server.pm.ShortcutService;
 import com.android.server.pm.UserManagerService;
 import com.android.server.pm.dex.OdsignStatsLogger;
 import com.android.server.pm.verify.domain.DomainVerificationService;
+import com.android.server.pocket.PocketService;
+import com.android.server.pocket.PocketBridgeService;
 import com.android.server.policy.AppOpsPolicy;
 import com.android.server.policy.PermissionPolicyService;
 import com.android.server.policy.PhoneWindowManager;
@@ -1727,6 +1729,10 @@ public final class SystemServer implements Dumpable {
             mSystemServiceManager.startService(PowerOffAlarmService.class);
             t.traceEnd();
 
+            t.traceBegin("StartSmart5gService");
+            mSystemServiceManager.startService(Smart5gService.class);
+            t.traceEnd();
+
         } catch (Throwable e) {
             Slog.e("System", "******************************************");
             Slog.e("System", "************ Failure starting core service");
@@ -2626,10 +2632,21 @@ public final class SystemServer implements Dumpable {
             t.traceBegin("StartBackgroundInstallControlService");
             mSystemServiceManager.startService(BackgroundInstallControlService.class);
             t.traceEnd();
-          
+
             t.traceBegin("StartHealthService");
             mSystemServiceManager.startService(HealthInterfaceService.class);
             t.traceEnd();
+
+            t.traceBegin("StartPocketService");
+            mSystemServiceManager.startService(PocketService.class);
+            t.traceEnd();
+
+            if (!context.getResources().getString(
+                    com.android.internal.R.string.config_pocketBridgeSysfsInpocket).isEmpty()) {
+                t.traceBegin("StartPocketBridgeService");
+                mSystemServiceManager.startService(PocketBridgeService.class);
+                t.traceEnd();
+            }
         }
 
         t.traceBegin("StartMediaProjectionManager");
